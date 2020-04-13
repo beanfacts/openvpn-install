@@ -1254,87 +1254,107 @@ function portForward() {
 		exit 1
 	fi
 
-	echo ""
-	echo "Select the existing client certificate you want to revoke"
-	tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2 | nl -s ') '
+
+	
 	if [[ "$NUMBEROFCLIENTS" == '1' ]]; then
-		read -rp "Select one client [1]: " CLIENTNUMBER
+		CLIENTNUMBER=1
 	else
+		echo ""
+		echo "Select the existing client you would like to enable 1:1 NAT for."
+		echo "Note: This effectively disables full tunneling for all other clients!"
+		tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2 | nl -s ') '
 		read -rp "Select one client [1-$NUMBEROFCLIENTS]: " CLIENTNUMBER
 	fi
 
 	CLIENT=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2 | sed -n "$CLIENTNUMBER"p)
+	echo "Client    : [$CLIENT]"
+
 	if type ipcalc > /dev/null 2>&1; then
 		SUBNET=$(cat /etc/openvpn/server.conf | grep server\ | cut -d " " -f 2,3)
-		CLIENT_ADDR=$(ipcalc $SUBNET | awk '{print $2}')
+		CLIENT_ADDR=$(ipcalc $SUBNET | grep "HostMax" | awk '{print $2}')
 	else
 		read -rp "Type in the static IPv4 to assign to this client: " CLIENT_ADDR
 	fi
-	echo "ifconfig-push $CLIENT_ADDR 255.255.255.255" >> /etc/openvpn/ccd/$CLIENT
 
-	if [[ $(iptables -t nat -L PREROUTING | wc -l) != '2' ]] then
-		echo "There are existing rules in your NAT table."
-		echo "Aborted."
-		exit 1
+	echo "Static IP : [$CLIENT_ADDR]"
+	
+	TEST_EXISTING_CONFIG=$(cat /etc/openvpn/ccd/$CLIENT | grep ifconfig-push)
+	TEST_EXISTING_IP=""
+	if [[ "$TEST_EXISTING_CONFIG" != "" ]]; then
+		TEST_EXISTING_IP=$(echo "$TEST_EXISTING_CONFIG" | cut -d " " -f 2)
+		if [[ "$TEST_EXISTING_IP" != "$CLIENT_ADDR" ]]; then
+			echo "Your CCD already contains a static IP address for $CLIENT."
+			echo "Forwarding rules will be applied to [$TEST_EXISTING_IP] instead."
+			echo "> $TEST_EXISTING_CONFIG"
+			$CLIENT_ADDR=$TEST_EXISTING_IP
+		fi
 	else
-		NIC=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-		IP4=$(curl -s -4 ifconfig.me)
-		i="0"
+		echo "ifconfig-push $CLIENT_ADDR 255.255.255.255" >> /etc/openvpn/ccd/$CLIENT
+	fi
 
-		while [[ $i -lt 2 ]]
+	if [[ $(iptables -t nat -L PREROUTING | wc -l) != '2' ]]; then
+		echo "There are existing rules in your NAT table."
+		read -rp "Press return to delete them or ^C to terminate."
+		# Remove existing NAT rules; with 1:1 NAT, no other clients may use the NAT functionalities.
+		iptables -t nat -F PREROUTING
+		iptables -t nat -F POSTROUTING
+	fi
+	
+	NIC=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+	IP4=$(curl -s -4 ifconfig.me)
+	i="0"
+
+	while [[ $i -lt 2 ]]
+	do
+			
+		# Modify TCP and UDP rules separately
+		if [[ "$i" == '0' ]]; then
+			NETSTAT_PARAMS="uln"
+			L4_PROTO="udp"
+			EXTRA_PARAMS=""
+		else
+			NETSTAT_PARAMS="tln"
+			L4_PROTO="tcp"
+			EXTRA_PARAMS="-m state --state NEW,ESTABLISHED,RELATED"
+		fi
+
+		DPORT=""
+		
+		# Find listening services (TCP/UDP)
+		netstat -$NETSTAT_PARAMS | grep -E -o ${IP4/./\\.}:[^*][^\ ]*\|0\.0\.0\.0:[^*][^\ ]* | ( while read line
+
 		do
-				
-				# Modify TCP and UDP rules separately
-				if [[ "$i" == '0' ]]; then
-						NETSTAT_PARAMS="uln"
-						L4_PROTO="udp"
-						EXTRA_PARAMS=""
-				else
-						NETSTAT_PARAMS="tln"
-						L4_PROTO="tcp"
-						EXTRA_PARAMS="-m state --state NEW,ESTABLISHED,RELATED -j ACCEPT"
-				fi
-
-				DPORT=""
-				
-				# Find listening services (TCP/UDP)
-				netstat -$NETSTAT_PARAMS | grep -E -o ${IP4/./\\.}:[^*][^\ ]*\|0\.0\.0\.0:[^*][^\ ]* | ( while read line
-
-				do
-						PMATCH=$(echo $line | cut -d ":" -f 2)
-						DPORT="$PMATCH,$DPORT"
-				done
-
-				DPORT=${DPORT%?}
-				LEN=${DPORT//[,\ ]/}
-				LEN=${#LEN}
-
-				# Remove existing NAT rules; with 1:1 NAT, no other clients may use the NAT functionalities.
-				iptables -t nat -F PREROUTING
-				iptables -t nat -F POSTROUTING
-
-				if [[ "$LEN" != '0' ]]; then
-						echo "$L4_PROTO ports not forwarded: $DPORT"
-						# Inbound NAT
-						echo "iptables -t nat -A PREROUTING -p $L4_PROTO -i $NIC --match multiport ! --dports $DPORT -j DNAT --to-destination $CLIENT"
-						echo "iptables -A FORWARD -p $L4_PROTO -i $NIC -o tun0 --match multiport ! --dports $DPORT $EXTRA_PARAMS -j ACCEPT"
-						# Outbound NAT
-						echo "iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -j ACCEPT"
-				else
-						echo "All $L4_PROTO ports forwarded."
-						# Inbound NAT
-						echo "iptables -t nat -A PREROUTING -p $L4_PROTO -i $NIC --to-destination $CLIENT_ADDR"
-						echo "iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT"
-						# Outbound NAT
-						echo "iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -j ACCEPT"
-				fi
-				)
-
-				# Static outbound NAT
-				echo "iptables -t nat -A POSTROUTING -o $NIC -j MASQUERADE"
-
-				i=$[$i+1]
+			PMATCH=$(echo $line | cut -d ":" -f 2)
+			DPORT="$PMATCH,$DPORT"
 		done
+
+		DPORT=${DPORT%?}
+		LEN=${DPORT//[,\ ]/}
+		LEN=${#LEN}
+
+		if [[ "$LEN" != '0' ]]; then
+			echo "$L4_PROTO ports not forwarded: $DPORT"
+			# Inbound NAT
+			iptables -t nat -A PREROUTING -p $L4_PROTO -i $NIC --match multiport ! --dports $DPORT -j DNAT --to-destination $CLIENT_ADDR
+			iptables -A FORWARD -p $L4_PROTO -i $NIC -o tun0 --match multiport ! --dports $DPORT $EXTRA_PARAMS -j ACCEPT
+			# Outbound NAT
+			iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -j ACCEPT
+		else
+			echo "All $L4_PROTO ports forwarded."
+			# Inbound NAT
+			iptables -t nat -A PREROUTING -p $L4_PROTO -i $NIC --to-destination $CLIENT_ADDR
+			iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+			# Outbound NAT
+			iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -j ACCEPT
+		fi
+		)
+
+		i=$[$i+1]
+		
+		# Static outbound NAT
+		iptables -t nat -p $L4_PROTO -A POSTROUTING -o $NIC -j MASQUERADE
+	
+	done
 }
 
 function manageMenu () {
@@ -1382,3 +1402,4 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 else
 	installOpenVPN
 fi
+
