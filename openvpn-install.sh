@@ -1093,6 +1093,10 @@ function newClient () {
 	exit 0
 }
 
+function listClients() {
+	tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2 | nl -s ') '
+}
+
 function revokeClient () {
 	NUMBEROFCLIENTS=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep -c "^V")
 	if [[ "$NUMBEROFCLIENTS" == '0' ]]; then
@@ -1241,6 +1245,98 @@ function removeOpenVPN () {
 	fi
 }
 
+function portForward() {
+	clear
+	NUMBEROFCLIENTS=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep -c "^V")
+	if [[ "$NUMBEROFCLIENTS" == '0' ]]; then
+		echo ""
+		echo "You have no existing clients!"
+		exit 1
+	fi
+
+	echo ""
+	echo "Select the existing client certificate you want to revoke"
+	tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2 | nl -s ') '
+	if [[ "$NUMBEROFCLIENTS" == '1' ]]; then
+		read -rp "Select one client [1]: " CLIENTNUMBER
+	else
+		read -rp "Select one client [1-$NUMBEROFCLIENTS]: " CLIENTNUMBER
+	fi
+
+	CLIENT=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2 | sed -n "$CLIENTNUMBER"p)
+	if type ipcalc > /dev/null 2>&1; then
+		SUBNET=$(cat /etc/openvpn/server.conf | grep server\ | cut -d " " -f 2,3)
+		CLIENT_ADDR=$(ipcalc $SUBNET | awk '{print $2}')
+	else
+		read -rp "Type in the static IPv4 to assign to this client: " CLIENT_ADDR
+	fi
+	echo "ifconfig-push $CLIENT_ADDR 255.255.255.255" >> /etc/openvpn/ccd/$CLIENT
+
+	if [[ $(iptables -t nat -L PREROUTING | wc -l) != '2' ]] then
+		echo "There are existing rules in your NAT table."
+		echo "Aborted."
+		exit 1
+	else
+		NIC=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+		IP4=$(curl -s -4 ifconfig.me)
+		i="0"
+
+		while [[ $i -lt 2 ]]
+		do
+				
+				# Modify TCP and UDP rules separately
+				if [[ "$i" == '0' ]]; then
+						NETSTAT_PARAMS="uln"
+						L4_PROTO="udp"
+						EXTRA_PARAMS=""
+				else
+						NETSTAT_PARAMS="tln"
+						L4_PROTO="tcp"
+						EXTRA_PARAMS="-m state --state NEW,ESTABLISHED,RELATED -j ACCEPT"
+				fi
+
+				DPORT=""
+				
+				# Find listening services (TCP/UDP)
+				netstat -$NETSTAT_PARAMS | grep -E -o ${IP4/./\\.}:[^*][^\ ]*\|0\.0\.0\.0:[^*][^\ ]* | ( while read line
+
+				do
+						PMATCH=$(echo $line | cut -d ":" -f 2)
+						DPORT="$PMATCH,$DPORT"
+				done
+
+				DPORT=${DPORT%?}
+				LEN=${DPORT//[,\ ]/}
+				LEN=${#LEN}
+
+				# Remove existing NAT rules; with 1:1 NAT, no other clients may use the NAT functionalities.
+				iptables -t nat -F PREROUTING
+				iptables -t nat -F POSTROUTING
+
+				if [[ "$LEN" != '0' ]]; then
+						echo "$L4_PROTO ports not forwarded: $DPORT"
+						# Inbound NAT
+						echo "iptables -t nat -A PREROUTING -p $L4_PROTO -i $NIC --match multiport ! --dports $DPORT -j DNAT --to-destination $CLIENT"
+						echo "iptables -A FORWARD -p $L4_PROTO -i $NIC -o tun0 --match multiport ! --dports $DPORT $EXTRA_PARAMS -j ACCEPT"
+						# Outbound NAT
+						echo "iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -j ACCEPT"
+				else
+						echo "All $L4_PROTO ports forwarded."
+						# Inbound NAT
+						echo "iptables -t nat -A PREROUTING -p $L4_PROTO -i $NIC --to-destination $CLIENT_ADDR"
+						echo "iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT"
+						# Outbound NAT
+						echo "iptables -A FORWARD -p $L4_PROTO -i tun0 -o $NIC -j ACCEPT"
+				fi
+				)
+
+				# Static outbound NAT
+				echo "iptables -t nat -A POSTROUTING -o $NIC -j MASQUERADE"
+
+				i=$[$i+1]
+		done
+}
+
 function manageMenu () {
 	clear
 	echo "Welcome to OpenVPN-install!"
@@ -1252,9 +1348,10 @@ function manageMenu () {
 	echo "   1) Add a new user"
 	echo "   2) Revoke existing user"
 	echo "   3) Remove OpenVPN"
-	echo "   4) Exit"
-	until [[ "$MENU_OPTION" =~ ^[1-4]$ ]]; do
-		read -rp "Select an option [1-4]: " MENU_OPTION
+	echo "   4) Configure 1:1 NAT"
+	echo "   5) Exit"
+	until [[ "$MENU_OPTION" =~ ^[1-5]$ ]]; do
+		read -rp "Select an option [1-5]: " MENU_OPTION
 	done
 
 	case $MENU_OPTION in
@@ -1268,6 +1365,9 @@ function manageMenu () {
 			removeOpenVPN
 		;;
 		4)
+			portForward
+		;;
+		5)
 			exit 0
 		;;
 	esac
