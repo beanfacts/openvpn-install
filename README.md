@@ -33,7 +33,9 @@ When OpenVPN is installed, you can run the script again, and you will get the ch
 
 In your home directory, you will have `.ovpn` files. These are the client configuration files. Download them from your server and connect using your favorite OpenVPN client.
 
-If you have any question, head to the [FAQ](#faq) first.
+If you have any question, head to the [FAQ](#faq) first. Please read everything before opening an issue.
+
+**PLEASE do net send me emails or private messages asking for help.** The only place to get help is the issues. Other people may be able to help and in the future, other users may also run into the same issue as you. My time is not available for free just for you, you're not special.
 
 ### Headless install
 
@@ -134,9 +136,7 @@ Since 2016, the two scripts have diverged and are not alike anymore, especially 
 
 ## FAQ
 
-**LOOK AT THE [WIKI](https://github.com/angristan/openvpn-install/wiki/FAQ) FOR MORE INFORMATION. PLEASE READ BOTH BEFORE OPENING AN ISSUE.**
-
-**PLEASE do net send me emails or private messages asking for help.** The only place to get help is the issues. Other people may be able to help and in the future, other users may also run into the same issue as you.
+More Q&A in [FAQ.md](FAQ.md).
 
 **Q:** Which provider do you recommend?
 
@@ -154,7 +154,7 @@ Since 2016, the two scripts have diverged and are not alike anymore, especially 
 
 - Windows: [The official OpenVPN community client](https://openvpn.net/index.php/download/community-downloads.html).
 - Linux: The `openvpn` package from your distribution. There is an [official APT repository](https://community.openvpn.net/openvpn/wiki/OpenvpnSoftwareRepos) for Debian/Ubuntu based distributions.
-- macOS: [Tunnelblick](https://tunnelblick.net/).
+- macOS: [Tunnelblick](https://tunnelblick.net/), [Viscosity](https://www.sparklabs.com/viscosity/).
 - Android: [OpenVPN for Android](https://play.google.com/store/apps/details?id=de.blinkt.openvpn).
 - iOS: [The official OpenVPN Connect client](https://itunes.apple.com/us/app/openvpn-connect/id590379981).
 
@@ -171,6 +171,8 @@ Since 2016, the two scripts have diverged and are not alike anymore, especially 
 **A:** Yes, please head to the [OpenVPN Manual](https://community.openvpn.net/openvpn/wiki/Openvpn24ManPage), which references all the options.
 
 ---
+
+More Q&A in [FAQ.md](FAQ.md).
 
 ##  One-stop solutions for public cloud
 
@@ -321,7 +323,9 @@ The script supports both and uses `tls-crypt` by default.
 
 ## Say thanks
 
-You can [say thanks](https://saythanks.io/to/Angristan) if you want!
+*Sadly saythanks.io doesn't exist anymore... Thanks for the dozens of messages! It's really meaninful to me.*
+
+*Still want to help? Check the "sponsor" button at the top of the page!*
 
 ## Credits & Licence
 
